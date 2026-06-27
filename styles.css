@@ -294,7 +294,7 @@ table {
 th,
 td {
   border-bottom: 1px solid var(--line);
-  padding: 10px;
+  padding: 4px 10px;
   text-align: left;
   vertical-align: middle;
 }
@@ -327,7 +327,8 @@ td.resource-cell {
 
 .resource-level-select {
   display: block;
-  margin-top: 4px;
+  min-height: 28px;
+  margin-top: 2px;
   width: fit-content;
   min-width: 92px;
   max-width: 100%;
@@ -337,7 +338,7 @@ td.resource-cell {
   color: #526258;
   font-size: 12px;
   font-weight: 800;
-  padding: 4px 24px 4px 8px;
+  padding: 3px 24px 3px 8px;
 }
 
 td.task-cell {
@@ -354,9 +355,12 @@ td.blocker-cell {
 
 .inline-input {
   width: 100%;
+  min-height: 30px;
   min-width: 70px;
   border-color: transparent;
   background: transparent;
+  padding-top: 4px;
+  padding-bottom: 4px;
 }
 
 .inline-input:focus {
@@ -371,6 +375,7 @@ td.blocker-cell {
 }
 
 .priority-select {
+  min-height: 32px;
   min-width: 104px;
   border-color: transparent;
   font-weight: 800;
