@@ -3,6 +3,7 @@ const TEAM_NAMES = ["Frontend", "QA", "Game Engine"];
 const STORAGE_KEY = "resource-capacity-planner-v2";
 const LEGACY_STORAGE_KEY = "resource-capacity-planner-v1";
 const PRIORITIES = ["Medium", "High", "Low"];
+const EXPERIENCE_LEVELS = ["Junior", "Mid", "Senior", "Lead"];
 const TOTAL_CELL_INDEX = 9;
 const FIRST_DAY_CELL_INDEX = 4;
 const SUPABASE_TABLE = "capacity_plans";
@@ -25,9 +26,15 @@ const makeTask = (
   effort: emptyEffort(),
 });
 
-const makeResource = (name = "Resource 1", tasks = [makeTask()], id = crypto.randomUUID()) => ({
+const makeResource = (
+  name = "Resource 1",
+  tasks = [makeTask()],
+  id = crypto.randomUUID(),
+  experienceLevel = "Mid",
+) => ({
   id,
   name,
+  experienceLevel: normalizeExperienceLevel(experienceLevel),
   tasks,
 });
 
@@ -121,7 +128,10 @@ entryForm.addEventListener("submit", (event) => {
   }
 
   if (mode === "resource") {
-    addResource(String(formData.get("name") || "").trim());
+    addResource(
+      String(formData.get("name") || "").trim(),
+      String(formData.get("experienceLevel") || "Mid"),
+    );
   }
 
   if (mode === "task") {
@@ -238,6 +248,7 @@ function normalizeResources(resources) {
   return resources.map((resource) => ({
     id: resource.id || crypto.randomUUID(),
     name: resource.name || "Unnamed resource",
+    experienceLevel: normalizeExperienceLevel(resource.experienceLevel),
     tasks: (resource.tasks?.length ? resource.tasks : [makeTask()]).map((task) => ({
       id: task.id || crypto.randomUUID(),
       name: task.name || "Untitled task",
@@ -432,9 +443,7 @@ function renderPlanner() {
     resource.tasks.forEach((task, taskIndex) => {
       const row = document.createElement("tr");
       if (taskIndex === 0) {
-        row.append(textInputCell(resource.name, "resource-cell", (value) => {
-          updateResourceName(resource.id, value || "Unnamed resource");
-        }));
+        row.append(resourceCell(resource));
       } else {
         row.append(blankCell("resource-cell"));
       }
@@ -549,6 +558,39 @@ function textInputCell(value, className, onChange) {
   return cell;
 }
 
+function resourceCell(resource) {
+  const cell = document.createElement("td");
+  cell.className = "resource-cell";
+
+  const nameInput = document.createElement("input");
+  nameInput.className = "inline-input resource-name-input";
+  nameInput.value = resource.name;
+  nameInput.addEventListener("change", () => {
+    updateResource(resource.id, { name: nameInput.value.trim() || "Unnamed resource" });
+    persist();
+    render();
+  });
+
+  const levelSelect = document.createElement("select");
+  levelSelect.className = "inline-input resource-level-select";
+  levelSelect.setAttribute("aria-label", `${resource.name} experience level`);
+  EXPERIENCE_LEVELS.forEach((level) => {
+    const option = document.createElement("option");
+    option.value = level;
+    option.textContent = level;
+    option.selected = level === normalizeExperienceLevel(resource.experienceLevel);
+    levelSelect.append(option);
+  });
+  levelSelect.addEventListener("change", () => {
+    updateResource(resource.id, { experienceLevel: levelSelect.value });
+    persist();
+    render();
+  });
+
+  cell.append(nameInput, levelSelect);
+  return cell;
+}
+
 function priorityCell(value, onChange) {
   const cell = document.createElement("td");
   cell.className = "priority-cell";
@@ -656,6 +698,7 @@ function openDialog(mode) {
   if (mode === "resource") {
     dialogTitle.textContent = "Add resource";
     dialogFields.append(field("Resource name", "name", `Resource ${activeWeek().resources.length + 1}`, true));
+    dialogFields.append(experienceLevelField());
   }
 
   if (mode === "task") {
@@ -705,6 +748,22 @@ function priorityField() {
     option.value = priority;
     option.textContent = priority;
     option.selected = priority === "Medium";
+    select.append(option);
+  });
+  label.append(select);
+  return label;
+}
+
+function experienceLevelField() {
+  const label = document.createElement("label");
+  label.textContent = "Experience level";
+  const select = document.createElement("select");
+  select.name = "experienceLevel";
+  EXPERIENCE_LEVELS.forEach((level) => {
+    const option = document.createElement("option");
+    option.value = level;
+    option.textContent = level;
+    option.selected = level === "Mid";
     select.append(option);
   });
   label.append(select);
@@ -774,6 +833,7 @@ function cloneWeekStructure(week, name) {
     resources: week.resources.map((resource) => ({
       id: resource.id,
       name: resource.name,
+      experienceLevel: normalizeExperienceLevel(resource.experienceLevel),
       tasks: resource.tasks.map((task) => ({
         id: task.id,
         name: task.name,
@@ -787,13 +847,13 @@ function cloneWeekStructure(week, name) {
   };
 }
 
-function addResource(name) {
+function addResource(name, experienceLevel) {
   if (!name) return;
   const resourceId = crypto.randomUUID();
   const taskId = crypto.randomUUID();
 
   currentAndFutureWeeks().forEach((week) => {
-    week.resources.push(makeResource(name, [makeTask("Task 1", "", taskId)], resourceId));
+    week.resources.push(makeResource(name, [makeTask("Task 1", "", taskId)], resourceId, experienceLevel));
   });
 }
 
@@ -829,10 +889,10 @@ function removeResource(resourceId) {
   render();
 }
 
-function updateResourceName(resourceId, name) {
+function updateResource(resourceId, updates) {
   currentAndFutureWeeks().forEach((week) => {
     const resource = week.resources.find((item) => item.id === resourceId);
-    if (resource) resource.name = name;
+    if (resource) Object.assign(resource, updates);
   });
 }
 
@@ -882,6 +942,10 @@ function slug(value) {
 
 function normalizePriority(value) {
   return PRIORITIES.includes(value) ? value : "Medium";
+}
+
+function normalizeExperienceLevel(value) {
+  return EXPERIENCE_LEVELS.includes(value) ? value : "Mid";
 }
 
 function uniqueTeamId(name, teams) {
