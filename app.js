@@ -91,11 +91,11 @@ let remoteSaveTimer = null;
 let remoteChannel = null;
 let isApplyingRemotePlan = false;
 
-document.querySelector("#addTeam").addEventListener("click", () => openDialog("team"));
-document.querySelector("#renameTeam").addEventListener("click", () => openDialog("renameTeam"));
-copyPreviousWeekButton.addEventListener("click", copyFromPreviousWeek);
-document.querySelector("#addResource").addEventListener("click", () => openDialog("resource"));
-document.querySelector("#exportJson").addEventListener("click", exportPlan);
+bindClick("#addTeam", () => openDialog("team"));
+bindClick("#renameTeam", () => openDialog("renameTeam"));
+bindClick("#copyPreviousWeek", copyFromPreviousWeek);
+bindClick("#addResource", () => openDialog("resource"));
+bindClick("#exportJson", exportPlan);
 
 todoNotes.addEventListener("input", () => {
   ensureActiveWeek().todoNotes = todoNotes.value;
@@ -163,6 +163,10 @@ entryForm.addEventListener("submit", (event) => {
 
 render();
 initializeSupabaseSync();
+
+function bindClick(selector, handler) {
+  document.querySelector(selector)?.addEventListener("click", handler);
+}
 
 function loadPlan() {
   const stored = localStorage.getItem(STORAGE_KEY);
