@@ -83,6 +83,7 @@ let isApplyingRemotePlan = false;
 document.querySelector("#addTeam").addEventListener("click", () => openDialog("team"));
 document.querySelector("#renameTeam").addEventListener("click", () => openDialog("renameTeam"));
 document.querySelector("#addWeek").addEventListener("click", () => openDialog("week"));
+document.querySelector("#renameWeek").addEventListener("click", () => openDialog("renameWeek"));
 document.querySelector("#addResource").addEventListener("click", () => openDialog("resource"));
 document.querySelector("#addTask").addEventListener("click", () => openDialog("task"));
 document.querySelector("#exportJson").addEventListener("click", exportPlan);
@@ -125,6 +126,10 @@ entryForm.addEventListener("submit", (event) => {
 
   if (mode === "renameTeam") {
     renameActiveTeam(String(formData.get("name") || "").trim());
+  }
+
+  if (mode === "renameWeek") {
+    renameActiveWeek(String(formData.get("name") || "").trim());
   }
 
   if (mode === "resource") {
@@ -684,6 +689,12 @@ function openDialog(mode) {
     dialogFields.append(field("Week name", "name", nextWeekName(), true));
   }
 
+  if (mode === "renameWeek") {
+    dialogTitle.textContent = "Rename week";
+    dialogFields.append(field("Week name", "name", activeWeek().name, true));
+    dialogFields.append(weekDangerZone());
+  }
+
   if (mode === "team") {
     dialogTitle.textContent = "Add team";
     dialogFields.append(field("Team name", "name", nextTeamName(), true));
@@ -787,6 +798,23 @@ function teamDangerZone() {
   return wrapper;
 }
 
+function weekDangerZone() {
+  const wrapper = document.createElement("div");
+  wrapper.className = "danger-zone";
+
+  const note = document.createElement("span");
+  note.textContent = "Week settings";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "link-danger";
+  button.textContent = "Remove this week";
+  button.addEventListener("click", removeActiveWeek);
+
+  wrapper.append(note, button);
+  return wrapper;
+}
+
 function removeActiveTeam() {
   const team = activeTeam();
   if (plan.teams.length <= 1) {
@@ -811,6 +839,31 @@ function addWeek(name) {
   const week = cloneWeekStructure(activeWeek(), name);
   activeTeam().weeks.push(week);
   activeTeam().activeWeekId = week.id;
+}
+
+function renameActiveWeek(name) {
+  if (!name) return;
+  activeWeek().name = name;
+}
+
+function removeActiveWeek() {
+  const team = activeTeam();
+  const week = activeWeek();
+  if (team.weeks.length <= 1) {
+    alert("At least one week is required.");
+    return;
+  }
+
+  const confirmed = confirm(`Remove "${week.name}" and all of its resources, tasks, and notes?`);
+  if (!confirmed) return;
+
+  const weekIndex = team.weeks.findIndex((item) => item.id === week.id);
+  team.weeks = team.weeks.filter((item) => item.id !== week.id);
+  const nextWeek = team.weeks[Math.max(0, weekIndex - 1)] || team.weeks[0];
+  team.activeWeekId = nextWeek.id;
+  entryDialog.close();
+  persist();
+  render();
 }
 
 function addTeam(name) {
