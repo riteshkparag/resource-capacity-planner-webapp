@@ -1,4 +1,5 @@
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+const DAY_SHORT_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const TEAM_NAMES = ["Frontend", "QA", "Game Engine"];
 const STORAGE_KEY = "resource-capacity-planner-v2";
 const LEGACY_STORAGE_KEY = "resource-capacity-planner-v1";
@@ -8,6 +9,7 @@ const TOTAL_CELL_INDEX = 9;
 const FIRST_DAY_CELL_INDEX = 4;
 const SUPABASE_TABLE = "capacity_plans";
 const REMOTE_SAVE_DELAY = 700;
+const DEFAULT_WEEK_START = "2026-06-22";
 const supabaseSettings = window.CAPACITY_PLANNER_SUPABASE || {};
 const remotePlanId = supabaseSettings.planId || "resource-capacity-planner";
 
@@ -38,34 +40,43 @@ const makeResource = (
   tasks,
 });
 
-const makeWeek = (name = "22nd June - 26th June", resources = [makeResource()], id = crypto.randomUUID()) => ({
+const makeWeek = (
+  startDate = DEFAULT_WEEK_START,
+  resources = [makeResource()],
+  id = startDate,
+) => ({
   id,
-  name,
+  startDate,
+  name: weekLabel(startDate),
   resources,
   todoNotes: "",
   upcomingNotes: "",
 });
 
 const makeTeam = (name) => {
-  const week = makeWeek("22nd June - 26th June", [
+  const week = makeWeek(DEFAULT_WEEK_START, [
     makeResource("Resource 1", [makeTask("Task 1"), makeTask("Task 2")]),
   ]);
   return {
     id: slug(name),
     name,
-    activeWeekId: week.id,
     weeks: [week],
   };
 };
 
 const seedPlan = {
   activeTeamId: slug(TEAM_NAMES[0]),
+  activeWeekStart: DEFAULT_WEEK_START,
   teams: TEAM_NAMES.map(makeTeam),
 };
 
 let plan = loadPlan();
 const teamSelect = document.querySelector("#teamSelect");
-const weekSelect = document.querySelector("#weekSelect");
+const weekDate = document.querySelector("#weekDate");
+const weekPickerButton = document.querySelector("#weekPickerButton");
+const weekDateDisplay = document.querySelector("#weekDateDisplay");
+const weekLabelDisplay = document.querySelector("#weekLabel");
+const copyPreviousWeekButton = document.querySelector("#copyPreviousWeek");
 const plannerBody = document.querySelector("#plannerBody");
 const todoNotes = document.querySelector("#todoNotes");
 const upcomingNotes = document.querySelector("#upcomingNotes");
@@ -82,20 +93,18 @@ let isApplyingRemotePlan = false;
 
 document.querySelector("#addTeam").addEventListener("click", () => openDialog("team"));
 document.querySelector("#renameTeam").addEventListener("click", () => openDialog("renameTeam"));
-document.querySelector("#addWeek").addEventListener("click", () => openDialog("week"));
-document.querySelector("#renameWeek").addEventListener("click", () => openDialog("renameWeek"));
+copyPreviousWeekButton.addEventListener("click", copyFromPreviousWeek);
 document.querySelector("#addResource").addEventListener("click", () => openDialog("resource"));
-document.querySelector("#addTask").addEventListener("click", () => openDialog("task"));
 document.querySelector("#exportJson").addEventListener("click", exportPlan);
 document.querySelector("#resetPlan").addEventListener("click", resetPlan);
 
 todoNotes.addEventListener("input", () => {
-  activeWeek().todoNotes = todoNotes.value;
+  ensureActiveWeek().todoNotes = todoNotes.value;
   persist();
 });
 
 upcomingNotes.addEventListener("input", () => {
-  activeWeek().upcomingNotes = upcomingNotes.value;
+  ensureActiveWeek().upcomingNotes = upcomingNotes.value;
   persist();
 });
 
@@ -105,10 +114,18 @@ teamSelect.addEventListener("change", () => {
   render();
 });
 
-weekSelect.addEventListener("change", () => {
-  activeTeam().activeWeekId = weekSelect.value;
+weekDate.addEventListener("change", () => {
+  if (!weekDate.value) return;
+  plan.activeWeekStart = startOfWorkWeek(weekDate.value);
   persist();
   render();
+});
+
+weekDate.addEventListener("click", () => openWeekDatePicker());
+weekDate.addEventListener("focus", () => openWeekDatePicker());
+weekPickerButton.addEventListener("click", () => {
+  weekDate.focus();
+  openWeekDatePicker();
 });
 
 entryForm.addEventListener("submit", (event) => {
@@ -116,20 +133,12 @@ entryForm.addEventListener("submit", (event) => {
   const formData = new FormData(entryForm);
   const mode = entryForm.dataset.mode;
 
-  if (mode === "week") {
-    addWeek(String(formData.get("name") || "").trim());
-  }
-
   if (mode === "team") {
     addTeam(String(formData.get("name") || "").trim());
   }
 
   if (mode === "renameTeam") {
     renameActiveTeam(String(formData.get("name") || "").trim());
-  }
-
-  if (mode === "renameWeek") {
-    renameActiveWeek(String(formData.get("name") || "").trim());
   }
 
   if (mode === "resource") {
@@ -182,19 +191,14 @@ function migrateLegacyPlan(legacyPlan) {
   if (!legacyPlan.weeks?.length) return structuredClone(seedPlan);
   const migrated = structuredClone(seedPlan);
   const frontend = migrated.teams[0];
-  frontend.weeks = legacyPlan.weeks.map((week) => ({
-    id: week.id || crypto.randomUUID(),
-    name: week.name || "Week",
-    resources: normalizeResources(week.resources || []),
-    todoNotes: week.todoNotes || "",
-    upcomingNotes: week.upcomingNotes || "",
-  }));
-  frontend.activeWeekId = legacyPlan.activeWeekId || frontend.weeks[0].id;
+  frontend.weeks = legacyPlan.weeks.map(normalizeWeek);
+  migrated.activeWeekStart = frontend.weeks[0]?.startDate || DEFAULT_WEEK_START;
   return normalizePlan(migrated);
 }
 
 function normalizePlan(candidate) {
   if (!candidate.teams?.length) return structuredClone(seedPlan);
+  const fallbackActiveWeekStart = getActiveWeekStart(candidate);
 
   const teamsById = new Map(candidate.teams.map((team) => [team.id || slug(team.name), team]));
   const defaultTeams = TEAM_NAMES.map((teamName) => {
@@ -203,19 +207,12 @@ function normalizePlan(candidate) {
     if (!existing) return makeTeam(teamName);
 
     const weeks = existing.weeks?.length
-      ? existing.weeks.map((week) => ({
-          id: week.id || crypto.randomUUID(),
-          name: week.name || "Week",
-          resources: normalizeResources(week.resources || []),
-          todoNotes: week.todoNotes || "",
-          upcomingNotes: week.upcomingNotes || "",
-        }))
+      ? normalizeWeeks(existing.weeks)
       : makeTeam(teamName).weeks;
 
     return {
       id,
       name: existing.name || teamName,
-      activeWeekId: existing.activeWeekId || weeks[0].id,
       weeks,
     };
   });
@@ -224,19 +221,12 @@ function normalizePlan(candidate) {
     .filter((team) => !defaultIds.has(team.id || slug(team.name)))
     .map((team) => {
       const weeks = team.weeks?.length
-        ? team.weeks.map((week) => ({
-            id: week.id || crypto.randomUUID(),
-            name: week.name || "Week",
-            resources: normalizeResources(week.resources || []),
-            todoNotes: week.todoNotes || "",
-            upcomingNotes: week.upcomingNotes || "",
-          }))
+        ? normalizeWeeks(team.weeks)
         : makeTeam(team.name || "New team").weeks;
 
       return {
         id: team.id || uniqueTeamId(team.name || "New team", candidate.teams),
         name: team.name || "New team",
-        activeWeekId: team.activeWeekId || weeks[0].id,
         weeks,
       };
     });
@@ -246,7 +236,42 @@ function normalizePlan(candidate) {
     ? candidate.activeTeamId
     : normalizedTeams[0].id;
 
-  return { activeTeamId, teams: normalizedTeams };
+  return {
+    activeTeamId,
+    activeWeekStart: fallbackActiveWeekStart,
+    teams: normalizedTeams,
+  };
+}
+
+function normalizeWeeks(weeks) {
+  const normalized = weeks.map(normalizeWeek);
+  const byStartDate = new Map();
+  normalized.forEach((week) => {
+    if (!byStartDate.has(week.startDate)) {
+      byStartDate.set(week.startDate, week);
+    }
+  });
+  return [...byStartDate.values()].sort((a, b) => a.startDate.localeCompare(b.startDate));
+}
+
+function normalizeWeek(week, index = 0) {
+  const startDate = normalizeWeekStart(week.startDate || week.weekStart || inferWeekStart(week, index));
+  return {
+    id: startDate,
+    startDate,
+    name: weekLabel(startDate),
+    resources: normalizeResources(week.resources || []),
+    todoNotes: week.todoNotes || "",
+    upcomingNotes: week.upcomingNotes || "",
+  };
+}
+
+function getActiveWeekStart(candidate) {
+  if (candidate.activeWeekStart) return normalizeWeekStart(candidate.activeWeekStart);
+
+  const activeTeam = candidate.teams?.find((team) => team.id === candidate.activeTeamId) || candidate.teams?.[0];
+  const activeWeek = activeTeam?.weeks?.find((week) => week.id === activeTeam.activeWeekId) || activeTeam?.weeks?.[0];
+  return normalizeWeekStart(activeWeek?.startDate || activeWeek?.weekStart || inferWeekStart(activeWeek, 0));
 }
 
 function normalizeResources(resources) {
@@ -398,24 +423,38 @@ function activeTeam() {
 }
 
 function activeWeek() {
-  const team = activeTeam();
-  return team.weeks.find((week) => week.id === team.activeWeekId) || team.weeks[0];
+  return findWeek(activeTeam(), plan.activeWeekStart);
 }
 
 function activeWeekIndex() {
-  return Math.max(0, activeTeam().weeks.findIndex((week) => week.id === activeWeek().id));
+  return Math.max(0, activeTeam().weeks.findIndex((week) => week.startDate === plan.activeWeekStart));
 }
 
 function currentAndFutureWeeks() {
-  return activeTeam().weeks.slice(activeWeekIndex());
+  const team = activeTeam();
+  return team.weeks.filter((week) => week.startDate >= plan.activeWeekStart);
 }
 
 function render() {
   renderTeamSelect();
-  renderWeekSelect();
+  renderWeekPicker();
+  renderDayHeaders();
   renderPlanner();
   renderNotes();
   renderSummary();
+}
+
+function renderDayHeaders() {
+  const headerCells = document.querySelectorAll("#plannerTable thead th");
+  DAYS.forEach((day, index) => {
+    const date = parseDateInput(addDays(plan.activeWeekStart, index));
+    headerCells[index + FIRST_DAY_CELL_INDEX].innerHTML = `
+      <span class="day-header">
+        <strong>${DAY_SHORT_NAMES[index]}</strong>
+        <small>${formatDate(date)}</small>
+      </span>
+    `;
+  });
 }
 
 function renderTeamSelect() {
@@ -429,20 +468,27 @@ function renderTeamSelect() {
   });
 }
 
-function renderWeekSelect() {
-  weekSelect.innerHTML = "";
-  activeTeam().weeks.forEach((week) => {
-    const option = document.createElement("option");
-    option.value = week.id;
-    option.textContent = week.name;
-    option.selected = week.id === activeWeek().id;
-    weekSelect.append(option);
-  });
+function renderWeekPicker() {
+  weekDate.value = plan.activeWeekStart;
+  weekDateDisplay.textContent = formatDate(parseDateInput(plan.activeWeekStart));
+  weekLabelDisplay.innerHTML = `<span>Work week</span><strong>${weekLabel(plan.activeWeekStart)}</strong>`;
+  copyPreviousWeekButton.disabled = !previousCalendarWeek();
 }
 
 function renderPlanner() {
   const week = activeWeek();
   plannerBody.innerHTML = "";
+
+  if (!week) {
+    const emptyRow = document.createElement("tr");
+    emptyRow.className = "empty-row";
+    const cell = document.createElement("td");
+    cell.colSpan = 11;
+    cell.textContent = "No data for this week.";
+    emptyRow.append(cell);
+    plannerBody.append(emptyRow);
+    return;
+  }
 
   week.resources.forEach((resource) => {
     resource.tasks.forEach((task, taskIndex) => {
@@ -502,7 +548,7 @@ function renderPlanner() {
     const totalRow = document.createElement("tr");
     totalRow.className = "total-row";
     totalRow.dataset.resourceTotal = resource.id;
-    totalRow.append(blankCell("resource-cell"));
+    totalRow.append(resourceTotalResourceCell(resource));
     totalRow.append(labelCell("Total"));
     totalRow.append(blankCell("priority-cell"));
     totalRow.append(blankCell("blocker-cell"));
@@ -515,8 +561,8 @@ function renderPlanner() {
 
 function renderNotes() {
   const week = activeWeek();
-  todoNotes.value = week.todoNotes || "";
-  upcomingNotes.value = week.upcomingNotes || "";
+  todoNotes.value = week?.todoNotes || "";
+  upcomingNotes.value = week?.upcomingNotes || "";
 }
 
 function renderResourceTotals(resource) {
@@ -532,6 +578,16 @@ function renderResourceTotals(resource) {
 
 function renderSummary() {
   const week = activeWeek();
+  if (!week) {
+    document.querySelector("#weekTotal").textContent = "0.0";
+    document.querySelector("#weekTotalHours").textContent = "0 hrs";
+    document.querySelector("#avgDaily").textContent = "0.0";
+    document.querySelector("#overTarget").textContent = "0";
+    document.querySelector("#resourceCount").textContent = "0";
+    document.querySelector("#taskCount").textContent = "0 tasks";
+    return;
+  }
+
   const totals = week.resources.flatMap((resource) =>
     DAYS.map((day) => sumResourceDay(resource, day)),
   );
@@ -657,6 +713,22 @@ function resourceDeleteCell(resource) {
   return cell;
 }
 
+function resourceTotalResourceCell(resource) {
+  const cell = document.createElement("td");
+  cell.className = "resource-cell resource-total-actions";
+
+  const addButton = document.createElement("button");
+  addButton.type = "button";
+  addButton.className = "inline-add-task";
+  addButton.textContent = "+ Task";
+  addButton.title = `Add task for ${resource.name}`;
+  addButton.setAttribute("aria-label", `Add task for ${resource.name}`);
+  addButton.addEventListener("click", () => quickAddTask(resource.id));
+
+  cell.append(addButton);
+  return cell;
+}
+
 function capacityClass(value) {
   if (value > 0.8) return "hot";
   if (value > 0.7) return "warn";
@@ -684,17 +756,6 @@ function openDialog(mode) {
   entryForm.dataset.mode = mode;
   dialogFields.innerHTML = "";
 
-  if (mode === "week") {
-    dialogTitle.textContent = "Add week";
-    dialogFields.append(field("Week name", "name", nextWeekName(), true));
-  }
-
-  if (mode === "renameWeek") {
-    dialogTitle.textContent = "Rename week";
-    dialogFields.append(field("Week name", "name", activeWeek().name, true));
-    dialogFields.append(weekDangerZone());
-  }
-
   if (mode === "team") {
     dialogTitle.textContent = "Add team";
     dialogFields.append(field("Team name", "name", nextTeamName(), true));
@@ -708,11 +769,16 @@ function openDialog(mode) {
 
   if (mode === "resource") {
     dialogTitle.textContent = "Add resource";
-    dialogFields.append(field("Resource name", "name", `Resource ${activeWeek().resources.length + 1}`, true));
+    const resourceCount = activeWeek()?.resources.length || 0;
+    dialogFields.append(field("Resource name", "name", `Resource ${resourceCount + 1}`, true));
     dialogFields.append(experienceLevelField());
   }
 
   if (mode === "task") {
+    if (!activeWeek()?.resources.length) {
+      alert("Add or copy resources before adding a task.");
+      return;
+    }
     dialogTitle.textContent = "Add task";
     dialogFields.append(resourceField());
     dialogFields.append(field("Task name", "name", "New task", true));
@@ -739,7 +805,7 @@ function resourceField() {
   label.textContent = "Resource";
   const select = document.createElement("select");
   select.name = "resourceId";
-  activeWeek().resources.forEach((resource) => {
+  ensureActiveWeek().resources.forEach((resource) => {
     const option = document.createElement("option");
     option.value = resource.id;
     option.textContent = resource.name;
@@ -798,23 +864,6 @@ function teamDangerZone() {
   return wrapper;
 }
 
-function weekDangerZone() {
-  const wrapper = document.createElement("div");
-  wrapper.className = "danger-zone";
-
-  const note = document.createElement("span");
-  note.textContent = "Week settings";
-
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "link-danger";
-  button.textContent = "Remove this week";
-  button.addEventListener("click", removeActiveWeek);
-
-  wrapper.append(note, button);
-  return wrapper;
-}
-
 function removeActiveTeam() {
   const team = activeTeam();
   if (plan.teams.length <= 1) {
@@ -834,38 +883,6 @@ function removeActiveTeam() {
   render();
 }
 
-function addWeek(name) {
-  if (!name) return;
-  const week = cloneWeekStructure(activeWeek(), name);
-  activeTeam().weeks.push(week);
-  activeTeam().activeWeekId = week.id;
-}
-
-function renameActiveWeek(name) {
-  if (!name) return;
-  activeWeek().name = name;
-}
-
-function removeActiveWeek() {
-  const team = activeTeam();
-  const week = activeWeek();
-  if (team.weeks.length <= 1) {
-    alert("At least one week is required.");
-    return;
-  }
-
-  const confirmed = confirm(`Remove "${week.name}" and all of its resources, tasks, and notes?`);
-  if (!confirmed) return;
-
-  const weekIndex = team.weeks.findIndex((item) => item.id === week.id);
-  team.weeks = team.weeks.filter((item) => item.id !== week.id);
-  const nextWeek = team.weeks[Math.max(0, weekIndex - 1)] || team.weeks[0];
-  team.activeWeekId = nextWeek.id;
-  entryDialog.close();
-  persist();
-  render();
-}
-
 function addTeam(name) {
   if (!name) return;
   const team = makeTeam(name);
@@ -879,10 +896,11 @@ function renameActiveTeam(name) {
   activeTeam().name = name;
 }
 
-function cloneWeekStructure(week, name) {
+function cloneWeekStructure(week, startDate) {
   return {
-    id: crypto.randomUUID(),
-    name,
+    id: startDate,
+    startDate,
+    name: weekLabel(startDate),
     resources: week.resources.map((resource) => ({
       id: resource.id,
       name: resource.name,
@@ -904,6 +922,7 @@ function addResource(name, experienceLevel) {
   if (!name) return;
   const resourceId = crypto.randomUUID();
   const taskId = crypto.randomUUID();
+  ensureActiveWeek();
 
   currentAndFutureWeeks().forEach((week) => {
     week.resources.push(makeResource(name, [makeTask("Task 1", "", taskId)], resourceId, experienceLevel));
@@ -913,12 +932,26 @@ function addResource(name, experienceLevel) {
 function addTask(resourceId, name, priority, blocker) {
   if (!name) return;
   const taskId = crypto.randomUUID();
+  ensureActiveWeek();
 
   currentAndFutureWeeks().forEach((week) => {
     const resource = week.resources.find((item) => item.id === resourceId);
     if (!resource) return;
     resource.tasks.push(makeTask(name, blocker, taskId, priority));
   });
+}
+
+function quickAddTask(resourceId) {
+  const taskId = crypto.randomUUID();
+
+  currentAndFutureWeeks().forEach((week) => {
+    const resource = week.resources.find((item) => item.id === resourceId);
+    if (!resource) return;
+    resource.tasks.push(makeTask("New task", "", taskId, "Medium"));
+  });
+
+  persist();
+  render();
 }
 
 function removeTask(resourceId, taskId) {
@@ -975,18 +1008,142 @@ function exportPlan() {
   URL.revokeObjectURL(url);
 }
 
-function nextWeekName() {
-  const now = new Date();
-  const monday = new Date(now);
-  const day = monday.getDay() || 7;
-  monday.setDate(monday.getDate() + (8 - day));
-  const friday = new Date(monday);
-  friday.setDate(monday.getDate() + 4);
-  return `${formatDate(monday)} - ${formatDate(friday)}`;
+function findWeek(team, startDate) {
+  return team?.weeks.find((week) => week.startDate === startDate);
+}
+
+function ensureActiveWeek() {
+  const team = activeTeam();
+  let week = findWeek(team, plan.activeWeekStart);
+  if (week) return week;
+
+  week = makeWeek(plan.activeWeekStart, []);
+  team.weeks.push(week);
+  team.weeks = normalizeWeeks(team.weeks);
+  return week;
+}
+
+function previousCalendarWeek() {
+  const previousStart = addDays(plan.activeWeekStart, -7);
+  const week = findWeek(activeTeam(), previousStart);
+  return week?.resources.length ? week : null;
+}
+
+function copyFromPreviousWeek() {
+  const previousWeek = previousCalendarWeek();
+  if (!previousWeek) {
+    alert("No previous week data found for this team.");
+    return;
+  }
+
+  const existingWeek = activeWeek();
+  if (existingWeek?.resources.length) {
+    const confirmed = confirm(`Replace "${weekLabel(plan.activeWeekStart)}" with resources and tasks from the previous week?`);
+    if (!confirmed) return;
+  }
+
+  const team = activeTeam();
+  const copiedWeek = cloneWeekStructure(previousWeek, plan.activeWeekStart);
+  team.weeks = team.weeks.filter((week) => week.startDate !== plan.activeWeekStart);
+  team.weeks.push(copiedWeek);
+  team.weeks = normalizeWeeks(team.weeks);
+  persist();
+  render();
+}
+
+function openWeekDatePicker() {
+  if (typeof weekDate.showPicker !== "function") return;
+  try {
+    weekDate.showPicker();
+  } catch {
+    // Some browsers only allow showPicker during direct user gestures.
+  }
+}
+
+function inferWeekStart(week, index = 0) {
+  if (!week) return DEFAULT_WEEK_START;
+  if (isIsoDate(week.id)) return week.id;
+
+  const parsedNameDate = parseWeekNameStart(week.name);
+  if (parsedNameDate) return parsedNameDate;
+
+  return addDays(DEFAULT_WEEK_START, index * 7);
+}
+
+function parseWeekNameStart(name) {
+  if (!name) return "";
+  const match = String(name).match(/(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)/);
+  if (!match) return "";
+
+  const monthIndex = monthIndexFromName(match[2]);
+  if (monthIndex < 0) return "";
+
+  const date = new Date(new Date().getFullYear(), monthIndex, Number(match[1]));
+  return startOfWorkWeek(formatDateInput(date));
+}
+
+function monthIndexFromName(name) {
+  return ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+    .findIndex((month) => name.toLowerCase().startsWith(month));
+}
+
+function normalizeWeekStart(value) {
+  if (isIsoDate(value)) return startOfWorkWeek(value);
+  return DEFAULT_WEEK_START;
+}
+
+function startOfWorkWeek(value) {
+  const date = parseDateInput(value);
+  const day = date.getDay() || 7;
+  date.setDate(date.getDate() - day + 1);
+  return formatDateInput(date);
+}
+
+function weekLabel(startDate) {
+  const monday = parseDateInput(startDate);
+  const friday = parseDateInput(addDays(startDate, 4));
+  const sameMonth = monday.getMonth() === friday.getMonth();
+  const sameYear = monday.getFullYear() === friday.getFullYear();
+
+  if (sameMonth && sameYear) {
+    return `${monday.toLocaleDateString(undefined, { month: "short" })} ${monday.getDate()} - ${friday.getDate()}, ${friday.getFullYear()}`;
+  }
+
+  if (sameYear) {
+    return `${formatDate(monday)} - ${formatDate(friday)}, ${friday.getFullYear()}`;
+  }
+
+  return `${formatDateWithYear(monday)} - ${formatDateWithYear(friday)}`;
 }
 
 function formatDate(date) {
   return date.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+function formatDateWithYear(date) {
+  return date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+function parseDateInput(value) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function formatDateInput(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(value, days) {
+  const date = parseDateInput(value);
+  date.setDate(date.getDate() + days);
+  return formatDateInput(date);
+}
+
+function isIsoDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
 }
 
 function slug(value) {

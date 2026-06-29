@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Resource Capacity Planner</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=week-picker-2">
   </head>
   <body>
     <main class="app-shell">
@@ -27,14 +27,20 @@
         </label>
         <button id="addTeam">+ Team</button>
         <button id="renameTeam">Rename Team</button>
-        <label>
+        <label class="week-picker-field">
           Week
-          <select id="weekSelect"></select>
+          <button class="week-picker-button" id="weekPickerButton" type="button">
+            <span id="weekDateDisplay">Select date</span>
+            <span>Pick date</span>
+          </button>
+          <input id="weekDate" class="week-date-input" type="date" aria-label="Select week date">
         </label>
-        <button id="addWeek">+ Week</button>
-        <button id="renameWeek">Rename Week</button>
+        <span class="week-label" id="weekLabel">
+          <span>Work week</span>
+          <strong>Week</strong>
+        </span>
+        <button id="copyPreviousWeek">Copy from Previous Week</button>
         <button id="addResource">+ Resource</button>
-        <button id="addTask">+ Task</button>
       </section>
 
       <section class="summary-grid" aria-label="Current week summary">
