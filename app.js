@@ -96,7 +96,6 @@ document.querySelector("#renameTeam").addEventListener("click", () => openDialog
 copyPreviousWeekButton.addEventListener("click", copyFromPreviousWeek);
 document.querySelector("#addResource").addEventListener("click", () => openDialog("resource"));
 document.querySelector("#exportJson").addEventListener("click", exportPlan);
-document.querySelector("#resetPlan").addEventListener("click", resetPlan);
 
 todoNotes.addEventListener("input", () => {
   ensureActiveWeek().todoNotes = todoNotes.value;
@@ -989,13 +988,6 @@ function updateTask(taskId, updates) {
       if (task) Object.assign(task, updates);
     });
   });
-}
-
-function resetPlan() {
-  if (!confirm("Reset all teams and weeks to the starter data?")) return;
-  plan = structuredClone(seedPlan);
-  persist();
-  render();
 }
 
 function exportPlan() {
