@@ -2,6 +2,7 @@ const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const DAY_SHORT_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const TEAM_NAMES = ["Frontend", "QA", "Game Engine"];
 const STORAGE_KEY = "resource-capacity-planner-v2";
+const VIEW_STORAGE_KEY = "resource-capacity-planner-view-v1";
 const LEGACY_STORAGE_KEY = "resource-capacity-planner-v1";
 const PRIORITIES = ["Medium", "High", "Low"];
 const EXPERIENCE_LEVELS = ["Junior", "Mid", "Senior", "Lead"];
@@ -109,14 +110,16 @@ upcomingNotes.addEventListener("input", () => {
 
 teamSelect.addEventListener("change", () => {
   plan.activeTeamId = teamSelect.value;
-  persist();
+  persistViewState();
+  persist({ remote: false });
   render();
 });
 
 weekDate.addEventListener("change", () => {
   if (!weekDate.value) return;
   plan.activeWeekStart = startOfWorkWeek(weekDate.value);
-  persist();
+  persistViewState();
+  persist({ remote: false });
   render();
 });
 
@@ -172,22 +175,22 @@ function loadPlan() {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored) {
     try {
-      return normalizePlan(JSON.parse(stored));
+      return applyLocalViewState(normalizePlan(JSON.parse(stored)));
     } catch {
-      return structuredClone(seedPlan);
+      return applyLocalViewState(structuredClone(seedPlan));
     }
   }
 
   const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
   if (legacy) {
     try {
-      return migrateLegacyPlan(JSON.parse(legacy));
+      return applyLocalViewState(migrateLegacyPlan(JSON.parse(legacy)));
     } catch {
-      return structuredClone(seedPlan);
+      return applyLocalViewState(structuredClone(seedPlan));
     }
   }
 
-  return structuredClone(seedPlan);
+  return applyLocalViewState(structuredClone(seedPlan));
 }
 
 function migrateLegacyPlan(legacyPlan) {
@@ -298,6 +301,50 @@ function persist(options = {}) {
   scheduleRemoteSave();
 }
 
+function persistViewState() {
+  localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify(currentViewState()));
+}
+
+function currentViewState() {
+  return {
+    activeTeamId: plan.activeTeamId,
+    activeWeekStart: plan.activeWeekStart,
+  };
+}
+
+function loadViewState() {
+  const stored = localStorage.getItem(VIEW_STORAGE_KEY);
+  if (!stored) return {};
+
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return {};
+  }
+}
+
+function applyLocalViewState(nextPlan) {
+  const viewState = loadViewState();
+  const activeTeamId = nextPlan.teams.some((team) => team.id === viewState.activeTeamId)
+    ? viewState.activeTeamId
+    : nextPlan.activeTeamId;
+  const activeWeekStart = viewState.activeWeekStart
+    ? normalizeWeekStart(viewState.activeWeekStart)
+    : nextPlan.activeWeekStart;
+
+  return {
+    ...nextPlan,
+    activeTeamId,
+    activeWeekStart,
+  };
+}
+
+function sharedPlanData(sourcePlan = plan) {
+  return {
+    teams: sourcePlan.teams,
+  };
+}
+
 async function initializeSupabaseSync() {
   if (!hasSupabaseConfig()) {
     setSyncStatus("Local only", "");
@@ -361,7 +408,7 @@ async function saveRemotePlanNow() {
   try {
     const { error } = await supabaseClient
       .from(SUPABASE_TABLE)
-      .upsert({ id: remotePlanId, data: plan }, { onConflict: "id" });
+      .upsert({ id: remotePlanId, data: sharedPlanData() }, { onConflict: "id" });
 
     if (error) throw error;
     setSyncStatus("Synced", "synced");
@@ -401,14 +448,20 @@ function subscribeToRemotePlan() {
 
 function applyRemotePlan(remotePlan) {
   isApplyingRemotePlan = true;
-  plan = normalizePlan(remotePlan);
+  const viewState = currentViewState();
+  plan = normalizePlan({
+    ...remotePlan,
+    activeTeamId: viewState.activeTeamId,
+    activeWeekStart: viewState.activeWeekStart,
+  });
+  persistViewState();
   persist({ remote: false });
   render();
   isApplyingRemotePlan = false;
 }
 
 function isSamePlan(candidate) {
-  return JSON.stringify(normalizePlan(candidate)) === JSON.stringify(plan);
+  return JSON.stringify(sharedPlanData(normalizePlan(candidate))) === JSON.stringify(sharedPlanData(plan));
 }
 
 function setSyncStatus(message, state) {
@@ -881,6 +934,7 @@ function removeActiveTeam() {
   plan.teams = plan.teams.filter((item) => item.id !== team.id);
   const nextTeam = plan.teams[Math.max(0, teamIndex - 1)] || plan.teams[0];
   plan.activeTeamId = nextTeam.id;
+  persistViewState();
   entryDialog.close();
   persist();
   render();
@@ -892,6 +946,7 @@ function addTeam(name) {
   team.id = uniqueTeamId(name, plan.teams);
   plan.teams.push(team);
   plan.activeTeamId = team.id;
+  persistViewState();
 }
 
 function renameActiveTeam(name) {
