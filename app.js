@@ -8,6 +8,7 @@ const PRIORITIES = ["Medium", "High", "Low"];
 const EXPERIENCE_LEVELS = ["Junior", "Mid", "Senior", "Lead"];
 const TOTAL_CELL_INDEX = 9;
 const FIRST_DAY_CELL_INDEX = 4;
+const EFFORT_PRECISION = 1000;
 const SUPABASE_TABLE = "capacity_plans";
 const REMOTE_SAVE_DELAY = 700;
 const DEFAULT_WEEK_START = "2026-06-22";
@@ -575,13 +576,16 @@ function renderPlanner() {
         input.step = "0.1";
         input.value = normalizeNumber(task.effort[day]);
         input.setAttribute("aria-label", `${resource.name} ${task.name} ${day}`);
-        input.addEventListener("input", () => {
-          task.effort[day] = Number(input.value || 0);
+        const updateEffort = (formatInput = false) => {
+          task.effort[day] = normalizeEffort(input.value);
+          if (formatInput) input.value = normalizeNumber(task.effort[day]);
           row.children[TOTAL_CELL_INDEX].textContent = normalizeNumber(sumTask(task));
           persist();
           renderSummary();
           renderResourceTotals(resource);
-        });
+        };
+        input.addEventListener("input", () => updateEffort());
+        input.addEventListener("change", () => updateEffort(true));
         cell.append(input);
         row.append(cell);
       });
@@ -653,7 +657,7 @@ function renderSummary() {
   const overTarget = totals.filter((value) => value > 0.7).length;
 
   document.querySelector("#weekTotal").textContent = normalizeNumber(weekTotal);
-  document.querySelector("#weekTotalHours").textContent = `${Math.round(weekTotal * 10)} hrs`;
+  document.querySelector("#weekTotalHours").textContent = `${formatNumber(weekTotal * 10, 0, 3)} hrs`;
   document.querySelector("#avgDaily").textContent = normalizeNumber(avgDaily);
   document.querySelector("#overTarget").textContent = String(overTarget);
   document.querySelector("#resourceCount").textContent = String(week.resources.length);
@@ -792,20 +796,38 @@ function capacityClass(value) {
 }
 
 function normalizeNumber(value) {
-  const rounded = Math.round(Number(value || 0) * 10) / 10;
-  return rounded.toFixed(1);
+  return formatNumber(value, 1, 3);
+}
+
+function formatNumber(value, minimumFractionDigits = 0, maximumFractionDigits = 3) {
+  const rounded = normalizeEffort(value);
+  return rounded.toLocaleString(undefined, {
+    minimumFractionDigits,
+    maximumFractionDigits,
+    useGrouping: false,
+  });
+}
+
+function normalizeEffort(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return 0;
+  return Math.round(number * EFFORT_PRECISION) / EFFORT_PRECISION;
 }
 
 function sumTask(task) {
-  return DAYS.reduce((sum, day) => sum + Number(task.effort[day] || 0), 0);
+  return DAYS.reduce((sum, day) => sum + toEffortUnits(task.effort[day]), 0) / EFFORT_PRECISION;
 }
 
 function sumResourceDay(resource, day) {
-  return resource.tasks.reduce((sum, task) => sum + Number(task.effort[day] || 0), 0);
+  return resource.tasks.reduce((sum, task) => sum + toEffortUnits(task.effort[day]), 0) / EFFORT_PRECISION;
 }
 
 function sumResource(resource) {
-  return DAYS.reduce((sum, day) => sum + sumResourceDay(resource, day), 0);
+  return DAYS.reduce((sum, day) => sum + toEffortUnits(sumResourceDay(resource, day)), 0) / EFFORT_PRECISION;
+}
+
+function toEffortUnits(value) {
+  return Math.round(Number(value || 0) * EFFORT_PRECISION);
 }
 
 function openDialog(mode) {
